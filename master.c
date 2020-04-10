@@ -18,8 +18,11 @@
 #define DEPOSIT 2
 #define VIEW 3
 #define LEAVE 4 
+#define sh shmctl
+#define sm semctl
+#define sm_get shmget
 
-#define NOOFATMS 5
+#define ATM_NUM 5
 
 int shmid,key=1230,semid,msgid;
 struct acc{
@@ -33,28 +36,27 @@ struct trans{
 	int type; 
 	int amount;
 };
-typedef struct mymsgbuf {
-    long    mtype;          /* Message type */   //here mtype is id (i.e. 1,2,3..n)
+typedef struct message {
+    long    mtype;         
     int id;
     int accno;
-    int req; //0-for account creation //1-for VIEW commaned(global consistency check)
-} mymsgbuf;
+    int req; //0-for creation of account, 1-for VIEW command(global consistency check)
+} message;
 
 void to_exit(int status)
 {
-	shmctl(shmid,IPC_RMID,0);
-    semctl(semid,IPC_RMID,0);
-    msgctl(msgid,IPC_RMID,NULL);
+	sh(shmid,IPC_RMID,0);      //  The sh() function allows the caller to control the shared memory segment specified by the shmid parameter
+    sm(semid,IPC_RMID,0);      //IPC_RMID - it is used to remove the shared memory segment identifier shmid from the system and destroy the shared memory segment.
+    msgctl(msgid,IPC_RMID,NULL);  //shmid - (Input) Shared memory identifier, a positive integer. It is returned by the sm_get() or shmget64() function and
+	                            //  is used to identify the shared memory segment on which to perform the control operation.
 	exit(status);
 }
-int send_message( int qid, struct mymsgbuf *qbuf )
+int send_msg( int qid, struct message *q_message )
 {
     int     result, length;
+    length = sizeof(struct message) - sizeof(long);       
 
-    /* The length is essentially the size of the structure minus sizeof(mtype) */
-    length = sizeof(struct mymsgbuf) - sizeof(long);       
-
-    if((result = msgsnd( qid, qbuf, length, 0)) == -1)
+    if((result = msgsnd( qid, q_message, length, 0)) == -1)
     {
 		perror("Error in sending message");
 		to_exit(1);
@@ -62,14 +64,13 @@ int send_message( int qid, struct mymsgbuf *qbuf )
    
     return(result);
 }
-int read_message( int qid, long type, struct mymsgbuf *qbuf )
+int read_msg( int qid, long type, struct message *q_message )
 {
     int     result, length;
 
-    /* The length is essentially the size of the structure minus sizeof(mtype) */
-    length = sizeof(struct mymsgbuf) - sizeof(long);        
+    length = sizeof(struct message) - sizeof(long);        
 
-    if((result = msgrcv( qid, qbuf, length, type,  0)) == -1)
+    if((result = msgrcv( qid, q_message, length, type,  0)) == -1)
     {
         perror("Error in receiving message");
 		to_exit(1);
@@ -84,7 +85,7 @@ int global_cons(int accno)
 	int atmsid,lshmid;
 	struct timeval t;
 	int money=0;
-	lshmid=shmget((key_t)key,100*sizeof(struct acc),IPC_CREAT|0666);
+	lshmid=sm_get((key_t)key,100*sizeof(struct acc),IPC_CREAT|0666);
 	struct acc *ptr;
 	ptr=(struct acc*)shmat(lshmid,NULL,0);
 	for(i=0;i<100;i++)
@@ -98,11 +99,11 @@ int global_cons(int accno)
 	}
 	int index=i;
 	FILE *fp=fopen("ATM_Locator.txt","r");
-	for(i=0;i<NOOFATMS;i++)
+	for(i=0;i<ATM_NUM;i++)
 	{
 		int x,y,z,lmemkey;
 		fscanf(fp,"%d %d %d %d",&x,&y,&z,&lmemkey);
-		int lshmid1=shmget((key_t)lmemkey,(100*sizeof(struct acc)+500*sizeof(struct trans)),IPC_CREAT|0666);
+		int lshmid1=sm_get((key_t)lmemkey,(100*sizeof(struct acc)+500*sizeof(struct trans)),IPC_CREAT|0666);
 		void *ptri;
 		struct acc *ptr1;
 		struct trans *ptr2;
@@ -148,26 +149,25 @@ int main()
 {
 	struct acc *ptr;
 	signal(SIGINT,to_exit);
-  shmid=shmget((key_t)key,100*sizeof(struct acc),IPC_EXCL|IPC_CREAT|0666);
-	msgid=msgget((key_t)key,IPC_CREAT|IPC_EXCL|0666); //to communicate with ATM process
+  shmid=sm_get((key_t)key,100*sizeof(struct acc),IPC_EXCL|IPC_CREAT|0666);
+	msgid=msgget((key_t)key,IPC_CREAT|IPC_EXCL|0666); //for communicating with ATM process
   if(shmid==-1)
   {
-  	perror("Shared memory creation failed");
+  	perror("Failure of Shared memory creation");
   	to_exit(1);
   }
   if(msgid==-1)
   {
-  	perror("Message Queue creation failed");
+  	perror("Failure of Message Queue creation");
   	to_exit(1);
   }
   ptr=(struct acc*)shmat(shmid,NULL,0);
-  // printf("shmid=%d ptr=%p\n",shmid, ptr);
   int i;
   for(i=0;i<100;i++)
   {
   	ptr[i].accno=-1;
   }
-  semid=semget((key_t)key,NOOFATMS,0666|IPC_CREAT|IPC_EXCL);
+  semid=semget((key_t)key,ATM_NUM,0666|IPC_CREAT|IPC_EXCL);
   if(semid==-1)
   {
   	perror("Semaphores creation failed");
@@ -175,32 +175,22 @@ int main()
   }
   FILE *fp=fopen("ATM_Locator.txt","w");
   i=0;
-  for(i=1;i<=NOOFATMS;i++)
+  for(i=1;i<=ATM_NUM;i++)
   {
   	fprintf(fp,"%d %d %d %d\n",i,(key+i),key,(key+i));//ATM: Id MsgQueKey SemKey MemorySegKey
   }
   fclose(fp);
-  for(i=1;i<=NOOFATMS;i++)
+  for(i=1;i<=ATM_NUM;i++)
   {
-  	// if(fork() == 0)
-   //  {
-      // printf("Hello\n");
-      // perror("");
-      // int temp=execlp("xterm","xterm","-hold","-e","atm",i,(key+i),key,(key+i),(char *)(NULL));
-      char command[100];
+  	  char command[100];
       sprintf(command,"./atm %d %d %d %d &",i,(key+i),key,(key+i));
       system(command);
-      // printf("%d\n",temp);
-      // printf("done\n");
-      // perror("");
-    // }
   }
   while(1)
   {
-		mymsgbuf msg;
-    //printf("reading\n");
+		message msg;
     long type=1230;
-		read_message(msgid,type,&msg);
+		read_msg(msgid,type,&msg);
 		int id=msg.id;
 		int accno=msg.accno;
 		if(msg.req==ENTER) //account checking and creation
@@ -228,23 +218,22 @@ int main()
 				ptr[i].accno=accno;
 				gettimeofday(&(ptr[i].t),NULL);
 				ptr[i].balance=0;
-			  // printf("Account :%d added with balance: %d\n",accno,ptr[i].balance);
       }
 		}
-		else if(msg.req==VIEW)//VIEW
+		else if(msg.req==VIEW)//for VIEW purpose
 		{
 			int money=global_cons(accno);
       printf("Master: Done\n");
-			mymsgbuf msg_temp;
+			message msg_temp;
 			msg_temp.id=id;
 			msg_temp.mtype=(long)id;
 			msg_temp.accno=accno;
 			msg_temp.req=money;
-			send_message(msgid,&msg_temp);
+			send_msg(msgid,&msg_temp);
 		}
   }
-  shmctl(shmid,IPC_RMID,0);
-  semctl(semid,IPC_RMID,0);
+  sh(shmid,IPC_RMID,0);
+  sm(semid,IPC_RMID,0);
   msgctl(msgid,IPC_RMID,NULL);
   return 0;
 }
