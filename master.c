@@ -45,10 +45,9 @@ typedef struct message {
 
 void to_exit(int status)
 {
-	sh(shmid,IPC_RMID,0);      //  The sh() function allows the caller to control the shared memory segment specified by the shmid parameter
-    sm(semid,IPC_RMID,0);      //IPC_RMID - it is used to remove the shared memory segment identifier shmid from the system and destroy the shared memory segment.
-    msgctl(msgid,IPC_RMID,NULL);  //shmid - (Input) Shared memory identifier, a positive integer. It is returned by the sm_get() or shmget64() function and
-	                            //  is used to identify the shared memory segment on which to perform the control operation.
+	sh(shmid,IPC_RMID,0);      
+	sm(semid,IPC_RMID,0);      
+        msgctl(msgid,IPC_RMID,NULL);  
 	exit(status);
 }
 int send_msg( int qid, struct message *q_message )
